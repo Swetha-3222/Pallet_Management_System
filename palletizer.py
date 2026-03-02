@@ -323,13 +323,6 @@ def build_info(boxes):
         info[nm] = {'L': float(L), 'W': float(W), 'H': float(H), 'Area': float(L)*float(W)}
     return info
 
-def get_group(code):
-    for group, items in GROUPS.items():
-        if code in items:
-            return group
-    return None
-
-
 # ===============================
 # MAIN PACKING FUNCTION
 # ===============================
