@@ -1,0 +1,3 @@
+libfreetype6
+libjpeg-dev
+zlib1g-dev
