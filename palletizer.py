@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 
 # -------------------- Page --------------------
 st.set_page_config(page_title="Palletizer", layout="wide")
-st.markdown("<h2 style='text-align:center; color:#008080;'>JK Fenner Palletizer Dashboard", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align:center; color:#008080;'>JK Fenner Palletizer Dashboard — MaxRects Edition</h2>", unsafe_allow_html=True)
 
 # -------------------- Defaults --------------------
 DEFAULT_PALLET = {'L': 48.0, 'W': 40.0, 'H': 36.0}
@@ -48,6 +48,28 @@ BOX_GROUP_RULES = {
     "AZ5":  ["AZ2", "AZ6"],
     "AZ10": ["AZ7", "AZ2"],
     "AZ14": ["AZ5", "AZ16"],
+}
+# ---------------------------------------------------
+# MAX BOXES PER LAYER TABLE (NEW LOGIC)
+# ---------------------------------------------------
+
+MAX_PER_LAYER = {
+    "AZ2": 16,
+    "AZ3": 8,
+    "AZ4": 8,
+    "AZ5": 8,
+    "AZ6": 4,
+    "AZ7": 12,
+    "AZ8": 8,
+    "AZ10": 6,
+    "AZ11": 6,
+    "AZ12": 6,
+    "AZ13": 3,
+    "AZ14": 4,
+    "AZ15": 4,
+    "AZ16": 4,
+    "AZ17": 2,
+    "AZ18": 1
 }
 
 FILLER_BOX = "AZ2"
@@ -327,6 +349,109 @@ def build_info(boxes):
 # MAIN PACKING FUNCTION
 # ===============================
 
+# ---------------------------------------------------
+# PRE-PACK FULL LAYERS BASED ON MAX_PER_LAYER
+# ---------------------------------------------------
+
+def prepack_full_layers(order_counts, pallet, boxes):
+
+    pallets = []
+    remaining_orders = order_counts.copy()
+
+    pallet_L = pallet["L"]
+    pallet_W = pallet["W"]
+    pallet_H = pallet["H"]
+
+    for box_code, qty in order_counts.items():
+
+        if box_code not in MAX_PER_LAYER:
+            continue
+
+        per_layer = MAX_PER_LAYER[box_code]
+
+        box_L, box_W, box_H = boxes[box_code]
+
+        layers_per_pallet = int(pallet_H // box_H)
+
+        if layers_per_pallet == 0:
+            continue
+
+        boxes_per_pallet = per_layer * layers_per_pallet
+
+        # 🚨 ONLY PREPACK FULL PALLETS
+        if qty < boxes_per_pallet:
+            continue
+
+        pallets_possible = qty // boxes_per_pallet
+
+        for _ in range(pallets_possible):
+
+            pallet_layers = []
+
+            for layer_index in range(layers_per_pallet):
+
+                layer = []
+
+                # Check normal orientation
+                rows_normal = int(pallet_W // box_W)
+                cols_normal = int(pallet_L // box_L)
+                fit_normal = rows_normal * cols_normal
+
+                # Check rotated orientation
+                rows_rot = int(pallet_W // box_L)
+                cols_rot = int(pallet_L // box_W)
+                fit_rot = rows_rot * cols_rot
+
+                # Choose orientation that supports MAX_PER_LAYER
+                if fit_rot >= per_layer and fit_rot > fit_normal:
+
+                    rotated = True
+                    rows = rows_rot
+                    cols = cols_rot
+                    place_L = box_W
+                    place_W = box_L
+
+                else:
+
+                    rotated = False
+                    rows = rows_normal
+                    cols = cols_normal
+                    place_L = box_L
+                    place_W = box_W
+
+                count = 0
+
+                for r in range(rows):
+                    for c in range(cols):
+
+                        if count >= per_layer:
+                            break
+
+                        x = c * place_L
+                        y = r * place_W
+
+                        layer.append({
+                            "name": box_code,
+                            "x": x,
+                            "y": y,
+                            "L": place_L,
+                            "W": place_W,
+                            "H": box_H,
+                            "rotated": rotated
+                        })
+
+                        count += 1
+
+                    if count >= per_layer:
+                        break
+                pallet_layers.append(layer)
+
+            pallets.append(pallet_layers)
+
+            remaining_orders[box_code] -= boxes_per_pallet
+
+    return pallets, remaining_orders
+
 def pack_all_pallets_maxrects(pallet, boxes, order_counts):
 
     info = build_info(boxes)
@@ -574,7 +699,24 @@ boxes_for_packing = copy.deepcopy(DEFAULT_BOXES)
 # -------------------- Run packer --------------------
 pallet = {'L': float(pallet_L), 'W': float(pallet_W), 'H': float(pallet_H)}
 reserve_flag = enable_reserve
-pallet_layers = pack_all_pallets_maxrects(pallet, boxes_for_packing, order_counts)
+# -------------------- Run packing --------------------
+
+# STEP 1: Pre-pack full pallets with same box type
+pre_pallets, remaining_orders = prepack_full_layers(
+    order_counts,
+    pallet,
+    boxes_for_packing
+)
+
+# STEP 2: Run optimizer on remaining boxes
+optimized_pallets = pack_all_pallets_maxrects(
+    pallet,
+    boxes_for_packing,
+    remaining_orders
+)
+
+# STEP 3: Combine pallets
+pallet_layers = pre_pallets + optimized_pallets
 st.success(f"Total pallets used: {len(pallet_layers)}")
 total_pallets = len(pallet_layers)
 
@@ -867,8 +1009,17 @@ def create_excel_report(
     for p_idx in range(2, len(assigned_layers_per_pallet) + 1):
         ws_new = wb.copy_worksheet(template_ws)
         ws_new.title = f"Pallet {p_idx}"
+
+        # ---- Unmerge cells from row 7 onwards ----
+        merged_ranges = list(ws_new.merged_cells.ranges)
+        for merged_range in merged_ranges:
+            if merged_range.min_row >= 7:
+                ws_new.unmerge_cells(str(merged_range))
+
         clear_values_after_row(ws_new, start_row=7)
+
         write_pallet(ws_new, p_idx, assigned_layers_per_pallet[p_idx - 1])
+
 
     # ---------------- Save output ----------------
     out_path = tempfile.NamedTemporaryFile(
