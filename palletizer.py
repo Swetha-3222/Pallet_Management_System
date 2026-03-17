@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 
 # -------------------- Page --------------------
 st.set_page_config(page_title="Palletizer", layout="wide")
-st.markdown("<h2 style='text-align:center; color:#008080;'>JK Fenner Palletizer Dashboard — MaxRects Edition</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align:center; color:#008080;'>JK Fenner Palletizer Dashboard", unsafe_allow_html=True)
 
 # -------------------- Defaults --------------------
 DEFAULT_PALLET = {'L': 48.0, 'W': 40.0, 'H': 36.0}
@@ -121,8 +121,8 @@ with st.sidebar:
 
     scale = st.number_input("Scale factor (visual)", value=8, min_value=1)
     st.markdown("---")
-    st.markdown("Paste orders **(Part, Qty, Package No)** — one per line")
-    st.markdown("Example: `E71531, 870, 100245`")
+    st.markdown("Paste orders **(Part, Qty, Package No, Box No)** — one per line")
+    st.markdown("Example: `E71531, 870, 100245, 20`")
 
     paste_text = st.text_area(
         "Paste Orders (one per line, comma / tab / space separated)",
@@ -627,6 +627,7 @@ def build_rule_sequence(order_left):
 order_counts = {}
 order_part_queue = {}
 box_pkg_queue = {}   # box_code → list of package numbers (1 per box)
+box_box_queue = {}   # box_code → list of box numbers (1 per box)
 
 for line in paste_text.splitlines():
     s = line.strip()
@@ -646,11 +647,18 @@ for line in paste_text.splitlines():
 
     # Package number (optional, ignored for planning)
     pkg_no = None
+    box_no = None
     if len(tokens) >= 3:
         try:
             pkg_no = int(tokens[2])  # stored if needed later
         except:
             st.warning(f"Invalid package number ignored in line: {line}")
+
+    if len(tokens) >= 4:
+        try:
+            box_no = int(tokens[3])  # stored if needed later
+        except:
+            st.warning(f"Invalid box number ignored in line: {line}")
 
     part_up = part.upper()
 
@@ -682,6 +690,11 @@ for line in paste_text.splitlines():
         box_pkg_queue.setdefault(box_code, [])
         for i in range(boxes_needed):
             box_pkg_queue[box_code].append(pkg_no + i)
+    # NEW: generate unique package numbers per box
+    if box_no is not None:
+        box_box_queue.setdefault(box_code, [])
+        for i in range(boxes_needed):
+            box_box_queue[box_code].append(box_no + i)
 
 # ensure default boxes keys exist
 for b in DEFAULT_BOXES.keys():
@@ -971,12 +984,15 @@ def create_excel_report(
                 # Get PKG NO safely
                 box_code = b["name"]
                 pkg_no = ""
+                box_no = ""
                 if box_code in box_pkg_queue and box_pkg_queue[box_code]:
                     pkg_no = box_pkg_queue[box_code].pop(0)
+                if box_code in box_box_queue and box_box_queue[box_code]:
+                    box_no = box_box_queue[box_code].pop(0)
 
                 gr, nt = WEIGHT_MAP.get(part, ("", ""))
 
-                ws.cell(row=current_row, column=6, value=global_box_no)  # BOX NO
+                ws.cell(row=current_row, column=6, value=box_no)  # BOX NO
                 ws.cell(row=current_row, column=7, value=pkg_no)         # PKGS NO
                 ws.cell(row=current_row, column=8, value=part)           # SIZE
                 ws.cell(row=current_row, column=9, value=MOQ)            # QTY
