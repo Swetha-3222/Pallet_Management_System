@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 
 # -------------------- Page --------------------
 st.set_page_config(page_title="Palletizer", layout="wide")
-st.markdown("<h2 style='text-align:center; color:#008080;'>JK Fenner Palletizer Dashboard", unsafe_allow_html=True)
+st.markdown("<h2 style='text-align:center; color:#008080;'>JK Fenner Palletizer Dashboard</h2>", unsafe_allow_html=True)
 
 # -------------------- Defaults --------------------
 DEFAULT_PALLET = {'L': 48.0, 'W': 40.0, 'H': 36.0}
