@@ -137,10 +137,10 @@ with st.sidebar:
 mapping_file = os.path.join(os.path.dirname(__file__), "MASTER PART.xlsx")
 try:
     df_map = pd.read_excel(mapping_file)
-    df_map.columns = [c.strip().upper() for c in df_map.columns]
+    df_map.columns = [c.upper() for c in df_map.columns]
     part_col = [c for c in df_map.columns if "PART" in c.upper()][0]
     box_col = [c for c in df_map.columns if "BOX" in c.upper()][0]
-    part_series = df_map[part_col].astype(str).apply(lambda x: x.strip().upper())
+    part_series = df_map[part_col].astype(str).apply(lambda x: x.upper())
     box_series = df_map[box_col].astype(str).apply(normalize_box_name)
     PART_TO_BOX = dict(zip(part_series, box_series))
     BOX_TO_PARTS = {}
@@ -156,7 +156,7 @@ weight_file = os.path.join(os.path.dirname(__file__), "AZ WEIGHT MASTER.xlsx")
 
 try:
     df_wt = pd.read_excel(weight_file)
-    df_wt.columns = [c.strip().upper() for c in df_wt.columns]
+    df_wt.columns = [c.upper() for c in df_wt.columns]
 
     # Expecting columns: SIZE, GR WT, NT WT
     if not {"SIZE", "GR WT", "NT WT"}.issubset(df_wt.columns):
