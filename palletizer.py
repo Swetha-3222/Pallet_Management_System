@@ -1048,29 +1048,12 @@ def create_excel_report(
 
 # -------------------- Top bar & PDF buttons --------------------
 st.markdown("---")
-top_cols = st.columns([2, 4, 1.2, 1.2, 1.4])
+top_cols = st.columns([2, 4, 1.2, 1.2])
 with top_cols[0]:
-    st.markdown(f"<div style='display:flex; align-items:center; gap:8px;'><h4 style='margin:0;'>✅ Total pallets used: {total_pallets}</h4></div>", unsafe_allow_html=True)
+    st.markdown(f"<div style='display:flex; align-items:center; gap:8px;'><h4 style='margin:0;'> Total pallets used: {total_pallets}</h4></div>", unsafe_allow_html=True)
 with top_cols[1]:
     st.write("")
 with top_cols[2]:
-    if show_pdf:
-        try:
-            layout_pdf_path = create_layout_pdf_visuals(assigned_layers_per_pallet, pallet)
-            with open(layout_pdf_path, 'rb') as f:
-                st.download_button("🖼 Download Layout PDF", f, file_name=os.path.basename(layout_pdf_path), mime="application/pdf")
-        except Exception as e:
-            st.error(f"Error preparing Layout PDF: {e}")
-with top_cols[3]:
-    if show_pdf:
-        try:
-            summary_pdf_path = create_summary_pdf_text(summary_per_pallet, grand_total, pallet)
-            with open(summary_pdf_path, 'rb') as f:
-                st.download_button("📝 Download Summary PDF", f, file_name=os.path.basename(summary_pdf_path), mime="application/pdf")
-        except Exception as e:
-            st.error(f"Error preparing Summary PDF: {e}")
-
-with top_cols[4]:
     try:
         report_path = create_excel_report(
             assigned_layers_per_pallet,
@@ -1088,6 +1071,15 @@ with top_cols[4]:
             )
     except Exception as e:
         st.error(f"Report generation failed: {e}")
+with top_cols[3]:
+    if show_pdf:
+        try:
+            summary_pdf_path = create_summary_pdf_text(summary_per_pallet, grand_total, pallet)
+            with open(summary_pdf_path, 'rb') as f:
+                st.download_button("📝 Download Summary PDF", f, file_name=os.path.basename(summary_pdf_path), mime="application/pdf")
+        except Exception as e:
+            st.error(f"Error preparing Summary PDF: {e}")
+
 
 st.markdown("---")
 
