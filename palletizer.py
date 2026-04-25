@@ -623,11 +623,116 @@ def build_rule_sequence(order_left):
     return sequence
 
 
+def build_part_runs(items):
+    runs = []
+    current_run = []
+
+    for item in items:
+        if not current_run or current_run[-1]["part"] == item["part"]:
+            current_run.append(item)
+        else:
+            runs.append(current_run)
+            current_run = [item]
+
+    if current_run:
+        runs.append(current_run)
+
+    return runs
+
+
+def assign_run_to_pallet(position_groups, pallet_idx, items):
+    group = position_groups[pallet_idx]
+    start = group["used"]
+    end = start + len(items)
+    targets = group["positions"][start:end]
+
+    for target, item in zip(targets, items):
+        box = target["box"]
+        box["part"] = item["part"]
+        box["pkg_no"] = item["pkg_no"]
+        box["box_no"] = item["box_no"]
+
+    group["used"] = end
+
+
+def assign_items_to_boxes(pallet_layers, order_item_queue):
+    box_positions = {}
+
+    for pallet_idx, pal_layers in enumerate(pallet_layers):
+        for layer_idx, layer in enumerate(pal_layers):
+            for box_idx, box in enumerate(layer):
+                box_positions.setdefault(box["name"], []).append({
+                    "pallet_idx": pallet_idx,
+                    "layer_idx": layer_idx,
+                    "box_idx": box_idx,
+                    "box": box
+                })
+
+    for box_code, positions in box_positions.items():
+        items = list(order_item_queue.get(box_code, []))
+        if not items:
+            continue
+
+        grouped_positions = {}
+        for pos in positions:
+            grouped_positions.setdefault(pos["pallet_idx"], []).append(pos)
+
+        position_groups = {}
+        for pallet_idx, group in grouped_positions.items():
+            position_groups[pallet_idx] = {
+                "positions": sorted(group, key=lambda pos: (pos["layer_idx"], pos["box_idx"])),
+                "used": 0
+            }
+
+        runs = build_part_runs(items)
+        indexed_runs = list(enumerate(runs))
+
+        deferred_runs = []
+
+        for _, run in sorted(indexed_runs, key=lambda item: (-len(item[1]), item[0])):
+            run_size = len(run)
+            candidates = []
+
+            for pallet_idx, group in position_groups.items():
+                remaining = len(group["positions"]) - group["used"]
+                if remaining >= run_size:
+                    candidates.append((remaining - run_size, pallet_idx))
+
+            if candidates:
+                _, best_pallet_idx = min(candidates, key=lambda item: (item[0], item[1]))
+                assign_run_to_pallet(position_groups, best_pallet_idx, run)
+            else:
+                deferred_runs.append(run)
+
+        for run in deferred_runs:
+            remaining_items = list(run)
+
+            while remaining_items:
+                candidates = []
+                for pallet_idx, group in position_groups.items():
+                    remaining = len(group["positions"]) - group["used"]
+                    if remaining > 0:
+                        candidates.append((remaining, pallet_idx))
+
+                if not candidates:
+                    break
+
+                remaining_capacity, best_pallet_idx = max(candidates, key=lambda item: (item[0], -item[1]))
+                chunk_size = min(len(remaining_items), remaining_capacity)
+                assign_run_to_pallet(position_groups, best_pallet_idx, remaining_items[:chunk_size])
+                remaining_items = remaining_items[chunk_size:]
+
+        for pallet_idx, group in position_groups.items():
+            for target in group["positions"][group["used"]:]:
+                box = target["box"]
+                box["part"] = BOX_TO_PARTS.get(box_code, [""])[0] or ""
+                box["pkg_no"] = ""
+                box["box_no"] = ""
+
+
 # -------------------- Parse pasted orders --------------------
 order_counts = {}
-order_part_queue = {}
-box_pkg_queue = {}   # box_code → list of package numbers (1 per box)
-box_box_queue = {}   # box_code → list of box numbers (1 per box)
+order_item_queue = {}   # box_code -> list of per-box assignment records
 
 for line in paste_text.splitlines():
     s = line.strip()
@@ -683,23 +788,18 @@ for line in paste_text.splitlines():
     box_code = normalize_box_name(PART_TO_BOX[part_up])
 
     order_counts[box_code] = order_counts.get(box_code, 0) + boxes_needed
-    order_part_queue.setdefault(box_code, []).extend([part_up] * boxes_needed)
-
-    # NEW: generate unique package numbers per box
-    if pkg_no is not None:
-        box_pkg_queue.setdefault(box_code, [])
-        for i in range(boxes_needed):
-            box_pkg_queue[box_code].append(pkg_no + i)
-    # NEW: generate unique package numbers per box
-    if box_no is not None:
-        box_box_queue.setdefault(box_code, [])
-        for i in range(boxes_needed):
-            box_box_queue[box_code].append(box_no + i)
+    order_item_queue.setdefault(box_code, [])
+    for i in range(boxes_needed):
+        order_item_queue[box_code].append({
+            "part": part_up,
+            "pkg_no": (pkg_no + i) if pkg_no is not None else "",
+            "box_no": (box_no + i) if box_no is not None else ""
+        })
 
 # ensure default boxes keys exist
 for b in DEFAULT_BOXES.keys():
     order_counts.setdefault(b, 0)
-    order_part_queue.setdefault(b, [])
+    order_item_queue.setdefault(b, [])
 
 if not any(v > 0 for v in order_counts.values()):
     st.info("No valid parts found from pasted orders. Paste PART numbers & quantities to pack.")
@@ -733,6 +833,8 @@ pallet_layers = pre_pallets + optimized_pallets
 st.success(f"Total pallets used: {len(pallet_layers)}")
 total_pallets = len(pallet_layers)
 
+assign_items_to_boxes(pallet_layers, order_item_queue)
+
 parts = set()
 
 for pal in pallet_layers:
@@ -750,7 +852,6 @@ if len(parts) == 1:
 
 
 # -------------------- Assign parts to placed boxes for summary & visuals --------------------
-local_queues_for_summary = {k: v.copy() for k, v in order_part_queue.items()}
 summary_per_pallet = []
 grand_total = {}
 
@@ -761,14 +862,9 @@ for pal_layers in pallet_layers:
     pal_totals = {}
     for layer in pal_layers:
         layer_counts = {}
-        # The layer is list of boxes with 'name' code; assign part from queue if available
         for b in layer:
             box_code = b['name']
-            qlist = local_queues_for_summary.get(box_code, [])
-            if qlist:
-                part_assigned = qlist.pop(0)
-            else:
-                part_assigned = BOX_TO_PARTS.get(box_code, [''])[0] or ''
+            part_assigned = b.get("part") or BOX_TO_PARTS.get(box_code, [''])[0] or ''
             b['part'] = part_assigned
             key = f"{part_assigned} ({box_code})" if part_assigned else box_code
             layer_counts[key] = layer_counts.get(key, 0) + 1
@@ -981,14 +1077,8 @@ def create_excel_report(
             for b in layer:
                 part = b.get("part", "").upper()
 
-                # Get PKG NO safely
-                box_code = b["name"]
-                pkg_no = ""
-                box_no = ""
-                if box_code in box_pkg_queue and box_pkg_queue[box_code]:
-                    pkg_no = box_pkg_queue[box_code].pop(0)
-                if box_code in box_box_queue and box_box_queue[box_code]:
-                    box_no = box_box_queue[box_code].pop(0)
+                pkg_no = b.get("pkg_no", "")
+                box_no = b.get("box_no", "")
 
                 gr, nt = WEIGHT_MAP.get(part, ("", ""))
 
@@ -1084,7 +1174,6 @@ with top_cols[3]:
 st.markdown("---")
 
 # -------------------- Show Pallets & Layers --------------------
-local_queues = {k: v.copy() for k, v in order_part_queue.items()}
 for p_idx, layers in enumerate(pallet_layers, start=1):
     st.markdown(f"## 🟫 Pallet {p_idx}")
     for l_idx, layer in enumerate(layers, start=1):
